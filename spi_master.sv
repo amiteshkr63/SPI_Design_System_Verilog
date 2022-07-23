@@ -1,9 +1,11 @@
+/*Notes: SSbar and RD_Wbar has not been implemented yet*/
+
 `include "globals.vh"
 module spi_master (rst_n, clk, data_valid, SPI_status_RDY_BSYbar, 
 	/*RD_Wbar,*/ WDATA, RDATA, MOSI, MISO, SCLK, SSbar);
 
 //independent signals
-input rst_n;
+input rst;
 
 //APB related signals
 input  clk, data_valid;
@@ -21,7 +23,7 @@ wire w_CPOL;
 wire w_CPHA;
 
 //States
-typedef enum {IDLE, ACTIVE, INACTIVE}states;
+typedef enum {IDLE, TRANSFER, INACTIVE}states;
 states PST, NST;
 //Debug signals
 wire err_ack; 
@@ -46,8 +48,8 @@ reg  [$clog2(`CLK_PER_HALF_BIT*2-1:0)]SPI_CLK_count;
 reg [$clog2(`TOTAL_EDGE_COUNT)-1:0]edge_counter;
 
 //SCLK Clock Handling
-always@(posedge clk, negedge rst_n) begin
-	if(~rst) begin
+always@(posedge clk, negedge rst) begin
+	if(rst) begin
 		SCLK<=w_CPOL;										//When rst SCLK is in default state
 		edge_counter<=0;	
 	end
@@ -58,7 +60,7 @@ always@(posedge clk, negedge rst_n) begin
 				If let's say CLK_PER_HALF_BIT=6
 				CLK_PER_HALF_BIT*2 -1=11
 				CLK_PER_HALF_BIT -1=5
-						  6				     6		  				6				     6
+						  6				     6		  					6				     6
 				0 <--------------> 5 <---------------> 11 <==> 0 <--------------> 5 <---------------> 11
 
 	*************************************************************************************************************/
@@ -82,7 +84,37 @@ always@(posedge clk, negedge rst_n) begin
 				end
 			end
 	end 
+end
+
+//PRESENT STATE ASSIGNMENT
+	always_ff @(posedge clk or posedge rst) begin : proc_
+		if(rst) begin
+			 PST<= IDLE;
+		end else begin
+			 PST<=NST;
+		end
+	end
+
+//FSM MACHINE
+always_comb begin begin
+	case(PST)
+		IDLE:	
+			case ({data_valid, SSbar})
+				'b10: NST=TRANSFER;
+				'b?1: NST=INACTIVE;
+				default : NST=IDLE;
+			endcase
+		TRANSFER:
+			case ({edge_counter==0, SSbar})
+				'b?1: NST=INACTIVE;
+				'b00: NST=PST;
+				'b10: NST=INACTIVE;
+			
+				default : /* default */;
+			endcase
+		INACTIVE:
+	endcase : PST
+end
 
 end
-	
 endmodule : spi_master
