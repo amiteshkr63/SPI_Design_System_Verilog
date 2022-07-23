@@ -16,3 +16,5 @@
 
 `define DATA_VALID 1
 `define DATA_INVALID 0
+
+`define TOTAL_EDGE_COUNT 16
