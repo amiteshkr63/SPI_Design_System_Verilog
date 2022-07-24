@@ -12,7 +12,7 @@ input rst;
 
 //APB related signals
 input  clk, data_valid;
-/*input RD_Wbar;*/
+/*input [1:0]RD_Wbar;*/
 input [`WORD_LENGTH-1:0]WDATA;
 output [`WORD_LENGTH-1:0]RDATA;
 output SPI_status_RDY_BSYbar;
@@ -20,6 +20,14 @@ output SPI_status_RDY_BSYbar;
 //SPI slave signals
 input MISO;
 output SCLK, MOSI, SSbar;
+
+//Internal signals
+reg [`WORD_LENGTH-1:0]SPI_BUFFER;
+reg  [$clog2(`CLK_PER_HALF_BIT*2-1:0)]SPI_CLK_count;
+reg [$clog2(`TOTAL_EDGE_COUNT)-1:0]edge_counter;
+reg [$clog2(`WORD_LENGTH)-1:0]data_counter;
+reg trailing_edge;
+reg leading_edge;
 
 //CPOL and CPHA
 wire w_CPOL;
@@ -38,14 +46,9 @@ wire err_ack;
 //		   -> Data allowed to change at trailing edge**
 //CPHA-> 1 -> Sampling at trailing Edge
 //		   -> Data allowed to change at leading edge** 
+
 assign w_CPOL= (SPI_MODE==`MODE_POL_PHS_10) | (SPI_MODE==`MODE_POL_PHS_11);
 assign w_CPHA= (SPI_MODE==`MODE_POL_PHS_01) | (SPI_MODE==`MODE_POL_PHS_11);
-
-//Internal signals
-reg [`WORD_LENGTH-1:0]SPI_BUFFER;
-reg  [$clog2(`CLK_PER_HALF_BIT*2-1:0)]SPI_CLK_count;
-reg [$clog2(`TOTAL_EDGE_COUNT)-1:0]edge_counter;
-reg [$clog2(`WORD_LENGTH)-1:0]data_counter;
 
 //SCLK Clock Handling
 always@(posedge clk, negedge rst) begin
@@ -64,20 +67,27 @@ always@(posedge clk, negedge rst) begin
 				0 <--------------> 5 <---------------> 11 <==> 0 <--------------> 5 <---------------> 11
 
 	*************************************************************************************************************/
+
+	//Default Assignment
+	leading_edge<=0;
+	trailing_edge<=0;
+
 	else begin
-			if(data_valid) begin
+			if(data_valid==`DATA_VALID) begin
 				edge_counter<=`TOTAL_EDGE_COUNT;
 			end
-			else if (edge_counter>0) begin
-				if (SPI_CLK_count == (`CLK_PER_HALF_BIT*2) -1) begin
-					SCLK<=~SCLK;
-					SPI_CLK_count<=0;
-					edge_counter<=edge_counter-'b1;
-				end
-				else if (SPI_CLK_count == `CLK_PER_HALF_BIT -1) begin
+			else if (edge_counter>0) begin										//Leading Edge Detection
+				if (SPI_CLK_count == `CLK_PER_HALF_BIT -1) begin
 					SCLK<=~SCLK;
 					SPI_CLK_count<=SPI_CLK_count+'b1;
 					edge_counter<=edge_counter-'b1;
+					leading_edge<=1;						//Used to tie leading edge with data_handling block(i.e.,data_counter)
+				end
+				else if (SPI_CLK_count == (`CLK_PER_HALF_BIT*2) -1) begin		//Trailing Edge Detection
+					SCLK<=~SCLK;
+					SPI_CLK_count<=0;
+					edge_counter<=edge_counter-'b1;
+					trailing_edge<=1;						//Used to tie trailing edge with data_handling block(i.e.,data_counter)
 				end
 				else begin
 					SPI_CLK_count<=SPI_CLK_count+'b1;
@@ -89,11 +99,11 @@ end
 //Data Counter Handling
 always_ff @(posedge clk or posedge rst) begin
 	if(rst) begin
-		data_counter<=0;
+		data_counter<='d7;
 		MOSI<=0;
 	end
 	else if(SPI_status_RDY_BSYbar==`SPI_READY) begin	//You can't write rst and SPI_status_RDY_BSYbar in one else block. ?????????????? VERIFY
-		data_counter<=0;								// SPI_status_RDY_BSYbar==`SPI_READY it might poosible you have to get Data in MOSI
+		data_counter<='d7;								// SPI_status_RDY_BSYbar==`SPI_READY it might poosible you have to get Data in MOSI
 	end
 /*********************************************************************************************************************
 IDEA:
@@ -101,7 +111,29 @@ IDEA:
 	If CPHA--> 1  "DATA will be available on MOSI with the SCLK"  (i.e.,with the leading edge of SCLK)
 ***********************************************************************************************************************/
 	else begin
-		 <= ;
+		 if(data_valid==`DATA_VALID & ~w_CPHA) begin
+		 	MOSI<=SPI_BUFFER[data_counter];//---------------------------------------------->> USE this in OUTPUT Assignment
+		 	data_counter<=data_counter-1;
+		 end
+/*********************************************************************************************************************
+IDEA:
+___________________________________________________________________________________________________________________
+|	CPOL  |	  CPHA     	|                               DESCRIPTION                                                |
+|==================================================================================================================|		
+|	0 	  |		0 -------------->	Data is allowed to change at Trailing Edge. So, data_counter is incremented at |
+|	1 	  |		0 -------------->	trailing Edge. So, condition is ====>>(trailing_edge & ~w_CPHA)				   |
+|==================================================================================================================|
+|	1 	  |		0 -------------->	Data is allowed to change at Trailing Edge. So, data_counter is incremented at |
+|	1 	  |		1 -------------->	trailing Edge. So, condition is ====>>(trailing_edge & ~w_CPHA)				   |
+|==================================================================================================================|	
+*********************************************************************************************************************/
+		 else if((leading_edge & w_CPHA) | (trailing_edge & ~w_CPHA)) begin
+		 	MOSI<=SPI_BUFFER[data_counter];//----------------------------------------------->>USE this in OUTPUT Assignment
+		 	data_counter<=data_counter-1;
+		 end
+		 else begin
+		 	data_counter<=data_counter;
+		 end
 	end
 end
 
@@ -119,7 +151,7 @@ states PST, NST;
 	end
 
 //FSM MACHINE
-always_comb begin begin
+always_comb begin
 	case(PST)
 		
 		IDLE:	
