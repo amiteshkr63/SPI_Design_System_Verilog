@@ -1,5 +1,8 @@
 /*Notes: SSbar and RD_Wbar has not been implemented yet*/
 
+//SSbar LOW ->SPI is acting as MASTER
+//SSbar HIGH -> SPI chill kr raha h. Mood nhi h uska kaam krne ka.
+
 `include "globals.vh"
 module spi_master (rst_n, clk, data_valid, SPI_status_RDY_BSYbar, 
 	/*RD_Wbar,*/ WDATA, RDATA, MOSI, MISO, SCLK, SSbar);
@@ -22,9 +25,6 @@ output SCLK, MOSI, SSbar;
 wire w_CPOL;
 wire w_CPHA;
 
-//States
-typedef enum {IDLE, TRANSFER, INACTIVE}states;
-states PST, NST;
 //Debug signals
 wire err_ack; 
 
@@ -35,10 +35,9 @@ wire err_ack;
 //		   -> Leading Edge-> Falling Edge**
 
 //CPHA-> 0 -> Sampling at Leading Edge
-//		   -> Data change at trailing edge**
-
+//		   -> Data allowed to change at trailing edge**
 //CPHA-> 1 -> Sampling at trailing Edge
-//		   -> Data change at leading edge** 
+//		   -> Data allowed to change at leading edge** 
 assign w_CPOL= (SPI_MODE==`MODE_POL_PHS_10) | (SPI_MODE==`MODE_POL_PHS_11);
 assign w_CPHA= (SPI_MODE==`MODE_POL_PHS_01) | (SPI_MODE==`MODE_POL_PHS_11);
 
@@ -46,6 +45,7 @@ assign w_CPHA= (SPI_MODE==`MODE_POL_PHS_01) | (SPI_MODE==`MODE_POL_PHS_11);
 reg [`WORD_LENGTH-1:0]SPI_BUFFER;
 reg  [$clog2(`CLK_PER_HALF_BIT*2-1:0)]SPI_CLK_count;
 reg [$clog2(`TOTAL_EDGE_COUNT)-1:0]edge_counter;
+reg [$clog2(`WORD_LENGTH)-1:0]data_counter;
 
 //SCLK Clock Handling
 always@(posedge clk, negedge rst) begin
@@ -86,8 +86,31 @@ always@(posedge clk, negedge rst) begin
 	end 
 end
 
+//Data Counter Handling
+always_ff @(posedge clk or posedge rst) begin
+	if(rst) begin
+		data_counter<=0;
+		MOSI<=0;
+	end
+	else if(SPI_status_RDY_BSYbar==`SPI_READY) begin	//You can't write rst and SPI_status_RDY_BSYbar in one else block. ?????????????? VERIFY
+		data_counter<=0;								// SPI_status_RDY_BSYbar==`SPI_READY it might poosible you have to get Data in MOSI
+	end
+/*********************************************************************************************************************
+IDEA:
+	If CPHA--> 0  "DATA will be available on MOSI as soon as data_valid is HIGH" (i.e.,before the leading edge of SCLK)
+	If CPHA--> 1  "DATA will be available on MOSI with the SCLK"  (i.e.,with the leading edge of SCLK)
+***********************************************************************************************************************/
+	else begin
+		 <= ;
+	end
+end
+
+//States
+typedef enum {IDLE, ACTIVE, TRANSFER, INACTIVE}states;
+states PST, NST;
+
 //PRESENT STATE ASSIGNMENT
-	always_ff @(posedge clk or posedge rst) begin : proc_
+	always_ff @(posedge clk or posedge rst) begin
 		if(rst) begin
 			 PST<= IDLE;
 		end else begin
@@ -98,23 +121,48 @@ end
 //FSM MACHINE
 always_comb begin begin
 	case(PST)
+		
 		IDLE:	
+			if (data_valid) begin
+				NST= ACTIVE;
+			end
+			else begin
+				NST=PST;
+			end 
+		
+		ACTIVE:
 			case ({data_valid, SSbar})
 				'b10: NST=TRANSFER;
-				'b?1: NST=INACTIVE;
+				'b11: NST=PST;
 				default : NST=IDLE;
 			endcase
+		
 		TRANSFER:
-			case ({edge_counter==0, SSbar})
-				'b?1: NST=INACTIVE;
-				'b00: NST=PST;
-				'b10: NST=INACTIVE;
-			
-				default : /* default */;
+			case ({data_counter<8, SSbar})
+				'b10: NST=PST;
+				'b00: NST=INACTIVE;		
+				default : NST=IDLE;
 			endcase
+		
 		INACTIVE:
-	endcase : PST
+			if (data_valid) begin
+				NST=ACTIVE;
+			end
+			else begin
+				NST=IDLE;
+			end
+endcase
 end
+
+//Output Assignments
+always_comb begin
+	case (PST)
+		IDLE:
+		ACTIVE:
+		TRANSFER:
+		INACTIVE:
+		default : /* default */;
+	endcase
 
 end
 endmodule : spi_master
