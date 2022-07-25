@@ -127,7 +127,7 @@ ________________________________________________________________________________
 |	1 	  |		1 -------------->	trailing Edge. So, condition is ====>>(trailing_edge & ~w_CPHA)				   |
 |==================================================================================================================|	
 *********************************************************************************************************************/
-		 else if((leading_edge & w_CPHA) | (trailing_edge & ~w_CPHA)) begin
+		 else if((leading_edge & w_CPHA) | (trailing_edge & ~w_CPHA)) begin//-------------------------------->BEAUTIFUL LINE OF SPI
 		 	MOSI<=SPI_BUFFER[data_counter];//----------------------------------------------->>USE this in OUTPUT Assignment
 		 	data_counter<=data_counter-1;
 		 end
@@ -138,9 +138,10 @@ ________________________________________________________________________________
 end
 
 //States
-typedef enum {IDLE, ACTIVE, TRANSFER, INACTIVE}states;
+typedef enum {IDLE, LOAD, TRANSFER, INACTIVE}states;
 states PST, NST;
 
+//INACTIVE--> In this state, I am sending 8 bits of Received Data from MISO to APB.
 //PRESENT STATE ASSIGNMENT
 	always_ff @(posedge clk or posedge rst) begin
 		if(rst) begin
@@ -156,29 +157,31 @@ always_comb begin
 		
 		IDLE:	
 			if (data_valid) begin
-				NST= ACTIVE;
+				NST= LOAD;
 			end
 			else begin
 				NST=PST;
 			end 
 		
-		ACTIVE:
-			case ({data_valid, SSbar})
-				'b10: NST=TRANSFER;
-				'b11: NST=PST;
-				default : NST=IDLE;
-			endcase
+		LOAD:
+			if (data_valid) begin
+				NST=TRANSFER;
+			end
+			else begin
+				NST=IDLE;
+			end
 		
 		TRANSFER:
-			case ({data_counter<8, SSbar})
-				'b10: NST=PST;
-				'b00: NST=INACTIVE;		
-				default : NST=IDLE;
-			endcase
+			if (data_counter<8) begin
+				NST=PST;
+			end
+			else begin
+				NST=INACTIVE;
+			end
 		
 		INACTIVE:
 			if (data_valid) begin
-				NST=ACTIVE;
+				NST=LOAD;
 			end
 			else begin
 				NST=IDLE;
@@ -190,7 +193,7 @@ end
 always_comb begin
 	case (PST)
 		IDLE:
-		ACTIVE:
+		LOAD:
 		TRANSFER:
 		INACTIVE:
 		default : /* default */;
