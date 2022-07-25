@@ -28,6 +28,7 @@ reg [$clog2(`TOTAL_EDGE_COUNT)-1:0]edge_counter;
 reg [$clog2(`WORD_LENGTH)-1:0]data_counter;
 reg trailing_edge;
 reg leading_edge;
+wire handshake;
 
 //CPOL and CPHA
 wire w_CPOL;
@@ -49,6 +50,7 @@ wire err_ack;
 
 assign w_CPOL= (SPI_MODE==`MODE_POL_PHS_10) | (SPI_MODE==`MODE_POL_PHS_11);
 assign w_CPHA= (SPI_MODE==`MODE_POL_PHS_01) | (SPI_MODE==`MODE_POL_PHS_11);
+//assign handshake=((SPI_status_RDY_BSYbar==`SPI_READY) & data_valid);
 
 //SCLK Clock Handling
 always@(posedge clk, negedge rst) begin
@@ -164,12 +166,11 @@ always_comb begin
 			end 
 		
 		LOAD:
-			if (data_valid) begin
-				NST=TRANSFER;
-			end
-			else begin
-				NST=IDLE;
-			end
+			case ({data_valid, SPI_status_RDY_BSYbar})
+			'b10: 	NST=PST;
+			'b11: 	NST=TRANSFER;
+				default : NST=IDLE;;
+			endcase
 		
 		TRANSFER:
 			if (data_counter<8) begin
@@ -180,12 +181,11 @@ always_comb begin
 			end
 		
 		INACTIVE:
-			if (data_valid) begin
-				NST=LOAD;
-			end
-			else begin
-				NST=IDLE;
-			end
+			case ({data_valid, SPI_status_RDY_BSYbar})
+				'b?0:	NST=PST;
+				'b01:	NST=IDLE;
+				'b11:	NST=LOAD;
+			endcase
 endcase
 end
 
