@@ -1,7 +1,7 @@
 /*Notes: SSbar and RD_Wbar has not been implemented yet*/
 
 //SSbar LOW ->SPI is acting as MASTER
-//SSbar HIGH -> SPI chill kr raha h. Mood nhi h uska kaam krne ka.
+//SSbar HIGH -> SPI chill kr raha h. Mood nhi h DATA transfer krne ka.
 
 `include "globals.vh"
 module spi_master (rst_n, clk, data_valid, SPI_status_RDY_BSYbar, 
@@ -65,7 +65,7 @@ always@(posedge clk, negedge rst) begin
 				If let's say CLK_PER_HALF_BIT=6
 				CLK_PER_HALF_BIT*2 -1=11
 				CLK_PER_HALF_BIT -1=5
-						  6				     6		  					6				     6
+						  6				     6		  					 6				    6
 				0 <--------------> 5 <---------------> 11 <==> 0 <--------------> 5 <---------------> 11
 
 	*************************************************************************************************************/
@@ -113,7 +113,10 @@ IDEA:
 	If CPHA--> 1  "DATA will be available on MOSI with the SCLK"  (i.e.,with the leading edge of SCLK)
 ***********************************************************************************************************************/
 	else begin
-		 if(data_valid==`DATA_VALID & ~w_CPHA) begin
+//I need 1 clock delay here for execution of this block. because I want to fill the SPI_BUFF with WDATA. 
+//Solution(1):Register the data_valid with r_data_valid. Then, Use r_data_valid in if condition.[e.g., r_data_valid<=data_valid then, use if(data_valid==`DATA_VALID & ~w_CPHA)]
+//Solution(2):I am going to use extra state "LOAD" only for loading WDATA in SPI_BUFFER in this code.
+		 if((data_valid==`DATA_VALID) & (~w_CPHA) & (PST==TRANSFER)) begin/**************ONE CLOCK DELAY REQUIRED HERE: Solution->(2)****************/
 		 	MOSI<=SPI_BUFFER[data_counter];//---------------------------------------------->> USE this in OUTPUT Assignment
 		 	data_counter<=data_counter-1;
 		 end
@@ -156,7 +159,6 @@ states PST, NST;
 //FSM MACHINE
 always_comb begin
 	case(PST)
-		
 		IDLE:	
 			if (data_valid) begin
 				NST= LOAD;
@@ -167,9 +169,9 @@ always_comb begin
 		
 		LOAD:
 			case ({data_valid, SPI_status_RDY_BSYbar})
-			'b10: 	NST=PST;
-			'b11: 	NST=TRANSFER;
-				default : NST=IDLE;;
+			'b10: 		NST=PST;
+			'b11: 		NST=TRANSFER;
+			default: 	NST=IDLE;;
 			endcase
 		
 		TRANSFER:
@@ -182,19 +184,27 @@ always_comb begin
 		
 		INACTIVE:
 			case ({data_valid, SPI_status_RDY_BSYbar})
-				'b?0:	NST=PST;
 				'b01:	NST=IDLE;
 				'b11:	NST=LOAD;
+				default:NST=PST;
 			endcase
 endcase
 end
+
 
 //Output Assignments
 always_comb begin
 	case (PST)
 		IDLE:
+				{MOSI, SCLK, SSbar} = {1'b0, 1'b0, w_CPOL, `DISCONNECTED_FROM_SLAVE};				//Multiple driver with 58th line of "SCLK Clock Handling block" ----> Think of some solution 
+				SPI_status_RDY_BSYbar=`SPI_READY;
 		LOAD:
+				{MOSI, SCLK, SSbar} = {1'b0, 1'b0, w_CPOL, `DISCONNECTED_FROM_SLAVE};
+				SPI_status_RDY_BSYbar=`SPI_READY;
 		TRANSFER:
+				{MOSI, MISO, SCLK, SSbar} = {1'b0, 1'b0, w_CPOL, `DISCONNECTED_FROM_SLAVE};
+				SPI_status_RDY_BSYbar=`SPI_READY;
+
 		INACTIVE:
 		default : /* default */;
 	endcase
