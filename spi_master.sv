@@ -5,21 +5,21 @@
 
 `include "globals.vh"
 module spi_master (rst_n, clk, data_valid, SPI_status_RDY_BSYbar, 
-	/*RD_Wbar,*/ WDATA, RDATA, MOSI, MISO, SCLK, SSbar);
+	/*RD_WR,*/ WDATA, RDATA, MOSI, MISO, SCLK, SSbar);
 
 //independent signals
 input rst;
 
 //APB related signals
 input  clk, data_valid;
-/*input [1:0]RD_Wbar;*/
+/*input [1:0]RD_WR;*/
 input [`WORD_LENGTH-1:0]WDATA;
-output [`WORD_LENGTH-1:0]RDATA;
-output SPI_status_RDY_BSYbar;
+output reg [`WORD_LENGTH-1:0]RDATA;
+output reg SPI_status_RDY_BSYbar;
 
 //SPI slave signals
 input MISO;
-output SCLK, MOSI, SSbar;
+output reg SCLK, MOSI, SSbar;
 
 //Internal signals
 reg [`WORD_LENGTH-1:0]SPI_BUFFER;
@@ -28,7 +28,7 @@ reg [$clog2(`TOTAL_EDGE_COUNT)-1:0]edge_counter;
 reg [$clog2(`WORD_LENGTH)-1:0]data_counter;
 reg trailing_edge;
 reg leading_edge;
-wire handshake;
+//wire handshake;
 
 //CPOL and CPHA
 wire w_CPOL;
@@ -67,7 +67,6 @@ always@(posedge clk, negedge rst) begin
 				CLK_PER_HALF_BIT -1=5
 						  6				     6		  					 6				    6
 				0 <--------------> 5 <---------------> 11 <==> 0 <--------------> 5 <---------------> 11
-
 	*************************************************************************************************************/
 
 	//Default Assignment
@@ -101,26 +100,26 @@ end
 //Data Counter Handling
 always_ff @(posedge clk or posedge rst) begin
 	if(rst) begin
-		data_counter<='d7;
+		data_counter<=`WORD_LENGTH-'d1;
 		MOSI<=0;
 	end
 	else if(SPI_status_RDY_BSYbar==`SPI_READY) begin	//You can't write rst and SPI_status_RDY_BSYbar in one else block. ?????????????? VERIFY
-		data_counter<='d7;								// SPI_status_RDY_BSYbar==`SPI_READY it might poosible you have to get Data in MOSI
+		data_counter<=`WORD_LENGTH-'d1;								// SPI_status_RDY_BSYbar==`SPI_READY it might poosible you have to get Data in MOSI
 	end
-/*********************************************************************************************************************
+/***********************************************************************************************************************************************************************************
 IDEA:
 	If CPHA--> 0  "DATA will be available on MOSI as soon as data_valid is HIGH" (i.e.,before the leading edge of SCLK)
 	If CPHA--> 1  "DATA will be available on MOSI with the SCLK"  (i.e.,with the leading edge of SCLK)
-***********************************************************************************************************************/
+***********************************************************************************************************************************************************************************/
 	else begin
 //I need 1 clock delay here for execution of this block. because I want to fill the SPI_BUFF with WDATA. 
 //Solution(1):Register the data_valid with r_data_valid. Then, Use r_data_valid in if condition.[e.g., r_data_valid<=data_valid then, use if(data_valid==`DATA_VALID & ~w_CPHA)]
 //Solution(2):I am going to use extra state "LOAD" only for loading WDATA in SPI_BUFFER in this code.
 		 if((data_valid==`DATA_VALID) & (~w_CPHA) & (PST==TRANSFER)) begin/**************ONE CLOCK DELAY REQUIRED HERE: Solution->(2)****************/
-		 	MOSI<=SPI_BUFFER[data_counter];//---------------------------------------------->> USE this in OUTPUT Assignment
+		 	//MOSI<=SPI_BUFFER[data_counter];//-->> USE this in OUTPUT Assignment*****************MIND NON_BLOCKING***********************????<< VERIFY >>
 		 	data_counter<=data_counter-1;
 		 end
-/*********************************************************************************************************************
+/***********************************************************************************************************************************************************************************
 IDEA:
 ___________________________________________________________________________________________________________________
 |	CPOL  |	  CPHA     	|                               DESCRIPTION                                                |
@@ -131,9 +130,9 @@ ________________________________________________________________________________
 |	1 	  |		0 -------------->	Data is allowed to change at Trailing Edge. So, data_counter is incremented at |
 |	1 	  |		1 -------------->	trailing Edge. So, condition is ====>>(trailing_edge & ~w_CPHA)				   |
 |==================================================================================================================|	
-*********************************************************************************************************************/
+***********************************************************************************************************************************************************************************/
 		 else if((leading_edge & w_CPHA) | (trailing_edge & ~w_CPHA)) begin//-------------------------------->BEAUTIFUL LINE OF SPI
-		 	MOSI<=SPI_BUFFER[data_counter];//----------------------------------------------->>USE this in OUTPUT Assignment
+		 	//MOSI<=SPI_BUFFER[data_counter];//-->>USE this in OUTPUT Assignment********************************MIND NON_BLOCKING*****************************????<< VERFY >>
 		 	data_counter<=data_counter-1;
 		 end
 		 else begin
@@ -196,17 +195,71 @@ end
 always_comb begin
 	case (PST)
 		IDLE:
-				{MOSI, SCLK, SSbar} = {1'b0, 1'b0, w_CPOL, `DISCONNECTED_FROM_SLAVE};				//Multiple driver with 58th line of "SCLK Clock Handling block" ----> Think of some solution 
+				{MOSI, SSbar} = {1'b0, `DISCONNECTED_FROM_SLAVE};
 				SPI_status_RDY_BSYbar=`SPI_READY;
+				RDATA='b0;
+				SPI_BUFFER='b0;
 		LOAD:
-				{MOSI, SCLK, SSbar} = {1'b0, 1'b0, w_CPOL, `DISCONNECTED_FROM_SLAVE};
+				{MOSI, SSbar} = {1'b0, `DISCONNECTED_FROM_SLAVE};
 				SPI_status_RDY_BSYbar=`SPI_READY;
-		TRANSFER:
-				{MOSI, MISO, SCLK, SSbar} = {1'b0, 1'b0, w_CPOL, `DISCONNECTED_FROM_SLAVE};
-				SPI_status_RDY_BSYbar=`SPI_READY;
+				SPI_BUFFER=/*RD_WR[0]?*/WDATA/*:'b0*/;
+				RDATA='b0;
+/********************************************************************************************************
+IDEA:
+TRANSFER
+========
+SSbar=1 (DISCONNECTED FROM SLAVE)
+		_________________________					_________________________
+		|M7|M6|M5|M4|M3|M2|M1|M0| ---------X--------|S7|S6|S5|S4|S3|S2|S1|S0|
+		~~~~~~~~~~~~~~~~~~~~~~~~~					~~~~~~~~~~~~~~~~~~~~~~~~~
 
+SSbar=0 (CONNECTED FROM SLAVE)
+
+Stage-1:
+--------
+			 _________________________				_________________________
+		|----|M6|M5|M4|M3|M2|M1|M0|S7|<<----<<------|S6|S5|S4|S3|S2|S1|S0|M7|<<------|
+		|	 ~~~~~~~~~~~~~~~~~~~~~~~~~				~~~~~~~~~~~~~~~~~~~~~~~~~		 |
+		|____________________________________________________________________________|
+
+Stage-2:
+--------
+			 _________________________				_________________________
+		|----|M5|M4|M3|M2|M1|M0|S7|S6|<<----<<------|S5|S4|S3|S2|S1|S0|M7|M6|<<------|
+		|	 ~~~~~~~~~~~~~~~~~~~~~~~~~				~~~~~~~~~~~~~~~~~~~~~~~~~		 |
+		|____________________________________________________________________________|
+
+
+Stage-3:
+--------
+			 _________________________				_________________________
+		|----|M4|M3|M2|M1|M0|S7|S6|S5|<<----<<------|S4|S3|S2|S1|S0|M7|M6|M5|<<------|
+		|	 ~~~~~~~~~~~~~~~~~~~~~~~~~				~~~~~~~~~~~~~~~~~~~~~~~~~		 |
+		|____________________________________________________________________________|
+										:
+										:
+										:
+										:
+Stage-8:
+--------
+			 _________________________				_________________________
+		|----|S7|S6|S5|S4|S3|S2|S1|S0|<<----<<------|M7|M6|M5|M4|M3|M2|M1|M0|<<------|
+		|	 ~~~~~~~~~~~~~~~~~~~~~~~~~				~~~~~~~~~~~~~~~~~~~~~~~~~		 |
+		|____________________________________________________________________________|
+
+
+
+*******************************************************************************************************/
+		TRANSFER:
+				{MOSI, SSbar} = {SPI_BUFFER[data_counter], `CONNECTED_FROM_SLAVE};
+				SPI_status_RDY_BSYbar=`SPI_BUSY;
+				SPI_BUFFER[data_counter-(`WORD_LENGTH-'d1)]=MISO;
+				RDATA='b0;
 		INACTIVE:
-		default : /* default */;
+				{MOSI, SSbar} = {1'b0, `DISCONNECTED_FROM_SLAVE};
+				SPI_status_RDY_BSYbar=`SPI_BUSY;
+				RDATA=/*RD_WR[1]?*/SPI_BUFFER/*:'b0*/;
+//No default condition, check if it is creating any unwanted latch. If yes, in default condition set IDLE's Output assignments.
 	endcase
 
 end
