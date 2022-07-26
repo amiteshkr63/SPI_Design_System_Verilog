@@ -16,6 +16,7 @@ input  clk, data_valid;
 input [`WORD_LENGTH-1:0]WDATA;
 output reg [`WORD_LENGTH-1:0]RDATA;
 output reg SPI_status_RDY_BSYbar;
+output reg rx_data_valid;
 
 //SPI slave signals
 input MISO;
@@ -25,7 +26,8 @@ output reg SCLK, MOSI, SSbar;
 reg [`WORD_LENGTH-1:0]SPI_BUFFER;
 reg  [$clog2(`CLK_PER_HALF_BIT*2-1:0)]SPI_CLK_count;
 reg [$clog2(`TOTAL_EDGE_COUNT)-1:0]edge_counter;
-reg [$clog2(`WORD_LENGTH)-1:0]data_counter;
+reg [$clog2(`WORD_LENGTH)-1:0]mosi_data_counter;
+reg [$clog2(`WORD_LENGTH)-1:0]miso_data_counter;
 reg trailing_edge;
 reg leading_edge;
 //wire handshake;
@@ -82,13 +84,13 @@ always@(posedge clk, negedge rst) begin
 					SCLK<=~SCLK;
 					SPI_CLK_count<=SPI_CLK_count+'b1;
 					edge_counter<=edge_counter-'b1;
-					leading_edge<=1;						//Used to tie leading edge with data_handling block(i.e.,data_counter)
+					leading_edge<=1;						//Used to tie leading edge with data_handling block(i.e.,mosi_data_counter)
 				end
 				else if (SPI_CLK_count == (`CLK_PER_HALF_BIT*2) -1) begin		//Trailing Edge Detection
 					SCLK<=~SCLK;
 					SPI_CLK_count<=0;
 					edge_counter<=edge_counter-'b1;
-					trailing_edge<=1;						//Used to tie trailing edge with data_handling block(i.e.,data_counter)
+					trailing_edge<=1;						//Used to tie trailing edge with data_handling block(i.e.,mosi_data_counter)
 				end
 				else begin
 					SPI_CLK_count<=SPI_CLK_count+'b1;
@@ -97,14 +99,13 @@ always@(posedge clk, negedge rst) begin
 	end 
 end
 
-//Data Counter Handling
+//Tx Data Counter Handling
 always_ff @(posedge clk or posedge rst) begin
 	if(rst) begin
-		data_counter<=`WORD_LENGTH-'d1;
-		MOSI<=0;
+		mosi_data_counter<=`WORD_LENGTH-'d1;
 	end
 	else if(SPI_status_RDY_BSYbar==`SPI_READY) begin	//You can't write rst and SPI_status_RDY_BSYbar in one else block. ?????????????? VERIFY
-		data_counter<=`WORD_LENGTH-'d1;								// SPI_status_RDY_BSYbar==`SPI_READY it might poosible you have to get Data in MOSI
+		mosi_data_counter<=`WORD_LENGTH-'d1;			// May be:SPI_status_RDY_BSYbar==`SPI_READY it might poosible you have to get Data in MOSI
 	end
 /***********************************************************************************************************************************************************************************
 IDEA:
@@ -115,32 +116,50 @@ IDEA:
 //I need 1 clock delay here for execution of this block. because I want to fill the SPI_BUFF with WDATA. 
 //Solution(1):Register the data_valid with r_data_valid. Then, Use r_data_valid in if condition.[e.g., r_data_valid<=data_valid then, use if(data_valid==`DATA_VALID & ~w_CPHA)]
 //Solution(2):I am going to use extra state "LOAD" only for loading WDATA in SPI_BUFFER in this code.
+		 
 		 if((data_valid==`DATA_VALID) & (~w_CPHA) & (PST==TRANSFER)) begin/**************ONE CLOCK DELAY REQUIRED HERE: Solution->(2)****************/
-		 	//MOSI<=SPI_BUFFER[data_counter];//-->> USE this in OUTPUT Assignment*****************MIND NON_BLOCKING***********************????<< VERIFY >>
-		 	data_counter<=data_counter-1;
+		 	//MOSI<=SPI_BUFFER[mosi_data_counter];//-->> USE this in OUTPUT Assignment*****************MIND NON_BLOCKING***********************????<< VERIFY >>
+		 	mosi_data_counter<=mosi_data_counter-1;
 		 end
 /***********************************************************************************************************************************************************************************
 IDEA:
-___________________________________________________________________________________________________________________
-|	CPOL  |	  CPHA     	|                               DESCRIPTION                                                |
-|==================================================================================================================|		
-|	0 	  |		0 -------------->	Data is allowed to change at Trailing Edge. So, data_counter is incremented at |
-|	1 	  |		0 -------------->	trailing Edge. So, condition is ====>>(trailing_edge & ~w_CPHA)				   |
-|==================================================================================================================|
-|	1 	  |		0 -------------->	Data is allowed to change at Trailing Edge. So, data_counter is incremented at |
-|	1 	  |		1 -------------->	trailing Edge. So, condition is ====>>(trailing_edge & ~w_CPHA)				   |
-|==================================================================================================================|	
+_________________________________________________________________________________________________________________________
+|	CPOL  |	  CPHA     	|                               DESCRIPTION                                                		|
+|=======================================================================================================================|		
+|	0 	  |		0 -------------->	Data is allowed to change at Trailing Edge. So, mosi_data_counter is incremented at |
+|	1 	  |		0 -------------->	trailing Edge. So, condition is ====>>(trailing_edge & ~w_CPHA)				   		|
+|=======================================================================================================================|
+|	1 	  |		0 -------------->	Data is allowed to change at Trailing Edge. So, mosi_data_counter is incremented at |
+|	1 	  |		1 -------------->	trailing Edge. So, condition is ====>>(trailing_edge & ~w_CPHA)				   		|
+|=======================================================================================================================|	
 ***********************************************************************************************************************************************************************************/
 		 else if((leading_edge & w_CPHA) | (trailing_edge & ~w_CPHA)) begin//-------------------------------->BEAUTIFUL LINE OF SPI
-		 	//MOSI<=SPI_BUFFER[data_counter];//-->>USE this in OUTPUT Assignment********************************MIND NON_BLOCKING*****************************????<< VERFY >>
-		 	data_counter<=data_counter-1;
+		 	//MOSI<=SPI_BUFFER[mosi_data_counter];//-->>USE this in OUTPUT Assignment********************************MIND NON_BLOCKING*****************************????<< VERFY >>
+		 	mosi_data_counter<=mosi_data_counter-1;
 		 end
 		 else begin
-		 	data_counter<=data_counter;
+		 	mosi_data_counter<=mosi_data_counter;
 		 end
 	end
 end
 
+//Rx DATA COUNTER
+always_ff @(posedge clk or posedge rst) begin
+	if(rst) begin
+		miso_data_counter <= `WORD_LENGTH - 'd1;
+		rx_data_valid <= 0;
+	end else begin
+		//Default assignment
+		 rx_data_valid <= 0;
+		 if (data_valid == `DATA_VALID) begin
+		 	miso_data_counter <= `WORD_LENGTH - 'd1;
+		 end
+		 else if ((leading_edge & ~w_CPHA) | (trailing_edge & w_CPHA)) begin
+		 	mosi_data_counter <= mosi_data_counter -'d1;
+		 end
+	end
+
+end
 //States
 typedef enum {IDLE, LOAD, TRANSFER, INACTIVE}states;
 states PST, NST;
@@ -174,8 +193,8 @@ always_comb begin
 			endcase
 		
 		TRANSFER:
-			if (data_counter<8) begin
-				NST=PST;
+			if (miso_data_counter<8)  begin  //I am changing state when last bit of spi slave data loaded into SPI Buffer
+				NST=PST;						//Verify: If last bit of SPI slave data 
 			end
 			else begin
 				NST=INACTIVE;
@@ -199,15 +218,18 @@ always_comb begin
 				SPI_status_RDY_BSYbar=`SPI_READY;
 				RDATA='b0;
 				SPI_BUFFER='b0;
+				rx_data_valid = 0;
 		LOAD:
 				{MOSI, SSbar} = {1'b0, `DISCONNECTED_FROM_SLAVE};
 				SPI_status_RDY_BSYbar=`SPI_READY;
 				SPI_BUFFER=/*RD_WR[0]?*/WDATA/*:'b0*/;
 				RDATA='b0;
+				rx_data_valid = 0;
 /********************************************************************************************************
 IDEA:
 TRANSFER
 ========
+
 SSbar=1 (DISCONNECTED FROM SLAVE)
 		_________________________					_________________________
 		|M7|M6|M5|M4|M3|M2|M1|M0| ---------X--------|S7|S6|S5|S4|S3|S2|S1|S0|
@@ -218,14 +240,14 @@ SSbar=0 (CONNECTED FROM SLAVE)
 Stage-1:
 --------
 			 _________________________				_________________________
-		|----|M6|M5|M4|M3|M2|M1|M0|S7|<<----<<------|S6|S5|S4|S3|S2|S1|S0|M7|<<------|
+		|----|S7|M6|M5|M4|M3|M2|M1|M0|<<----<<------|M7|S6|S5|S4|S3|S2|S1|S0|<<------|
 		|	 ~~~~~~~~~~~~~~~~~~~~~~~~~				~~~~~~~~~~~~~~~~~~~~~~~~~		 |
 		|____________________________________________________________________________|
 
 Stage-2:
 --------
 			 _________________________				_________________________
-		|----|M5|M4|M3|M2|M1|M0|S7|S6|<<----<<------|S5|S4|S3|S2|S1|S0|M7|M6|<<------|
+		|----|S7|S6|M5|M4|M3|M2|M1|M0|<<----<<------|M7|M6|S5|S4|S3|S2|S1|S0|<<------|
 		|	 ~~~~~~~~~~~~~~~~~~~~~~~~~				~~~~~~~~~~~~~~~~~~~~~~~~~		 |
 		|____________________________________________________________________________|
 
@@ -233,7 +255,7 @@ Stage-2:
 Stage-3:
 --------
 			 _________________________				_________________________
-		|----|M4|M3|M2|M1|M0|S7|S6|S5|<<----<<------|S4|S3|S2|S1|S0|M7|M6|M5|<<------|
+		|----|S7|S6|S5|M4|M3|M2|M1|M0|<<----<<------|M7|M6|M5|S4|S3|S2|S1|S0|<<------|
 		|	 ~~~~~~~~~~~~~~~~~~~~~~~~~				~~~~~~~~~~~~~~~~~~~~~~~~~		 |
 		|____________________________________________________________________________|
 										:
@@ -247,18 +269,20 @@ Stage-8:
 		|	 ~~~~~~~~~~~~~~~~~~~~~~~~~				~~~~~~~~~~~~~~~~~~~~~~~~~		 |
 		|____________________________________________________________________________|
 
-
+SSbar=1 (DISCONNECTED FROM SLAVE)
 
 *******************************************************************************************************/
 		TRANSFER:
-				{MOSI, SSbar} = {SPI_BUFFER[data_counter], `CONNECTED_FROM_SLAVE};
+				{MOSI, SSbar} = {SPI_BUFFER[mosi_data_counter], `CONNECTED_FROM_SLAVE};
 				SPI_status_RDY_BSYbar=`SPI_BUSY;
-				SPI_BUFFER[data_counter-(`WORD_LENGTH-'d1)]=MISO;
+				SPI_BUFFER[miso_data_counter]=MISO;
 				RDATA='b0;
+				rx_data_valid=0;
 		INACTIVE:
 				{MOSI, SSbar} = {1'b0, `DISCONNECTED_FROM_SLAVE};
 				SPI_status_RDY_BSYbar=`SPI_BUSY;
 				RDATA=/*RD_WR[1]?*/SPI_BUFFER/*:'b0*/;
+				rx_data_valid = 1;
 //No default condition, check if it is creating any unwanted latch. If yes, in default condition set IDLE's Output assignments.
 	endcase
 
