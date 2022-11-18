@@ -4,19 +4,19 @@
 //SSbar HIGH -> SPI chill kr raha h. Mood nhi h DATA transfer krne ka.
 
 `include "globals.vh"
-module spi_master (rst_n, clk, data_valid, SPI_status_RDY_BSYbar, 
+module spi_master (rst_n, clk, apb_ready, SPI_status_RDY_BSYbar, 
 	/*RD_WR,*/ WDATA, RDATA, MOSI, MISO, SCLK, SSbar);
 
 //independent signals
-input rst;
+input rst_n;
 
 //APB related signals
-input  clk, data_valid;
+input  clk, apb_ready;
 /*input [1:0]RD_WR;*/
 input [`WORD_LENGTH-1:0]WDATA;
 output reg [`WORD_LENGTH-1:0]RDATA;
-output reg SPI_status_RDY_BSYbar;
-output reg rx_data_valid;
+output reg SPI_status_RDY_BSYbar;				
+output reg rx_data_valid;						//To tell APB that SPI completed Transaction
 
 //SPI slave signals
 input MISO;
@@ -24,12 +24,13 @@ output reg SCLK, MOSI, SSbar;
 
 //Internal signals
 reg [`WORD_LENGTH-1:0]SPI_BUFFER;
-reg  [$clog2(`CLK_PER_HALF_BIT*2-1:0)]SPI_CLK_count;
+reg  [$clog2(`CLK_PER_HALF_BIT*2)-1:0]SPI_CLK_count;
 reg [$clog2(`TOTAL_EDGE_COUNT)-1:0]edge_counter;
 reg [$clog2(`WORD_LENGTH)-1:0]mosi_data_counter;
 reg [$clog2(`WORD_LENGTH)-1:0]miso_data_counter;
 reg trailing_edge;
 reg leading_edge;
+wire [1:0]SPI_MODE;
 //wire handshake;
 
 //CPOL and CPHA
@@ -50,15 +51,21 @@ wire err_ack;
 //CPHA-> 1 -> Sampling at trailing Edge
 //		   -> Data allowed to change at leading edge** 
 
+//////////////////////////////////////////////MODE SELECTION//////////////////////////////////////////
+assign SPI_MODE=`MODE_POL_PHS_00;
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+
 assign w_CPOL= (SPI_MODE==`MODE_POL_PHS_10) | (SPI_MODE==`MODE_POL_PHS_11);
 assign w_CPHA= (SPI_MODE==`MODE_POL_PHS_01) | (SPI_MODE==`MODE_POL_PHS_11);
-//assign handshake=((SPI_status_RDY_BSYbar==`SPI_READY) & data_valid);
+//assign handshake=((SPI_status_RDY_BSYbar==`SPI_READY) & apb_ready);
 
 //SCLK Clock Handling
-always@(posedge clk, negedge rst) begin
-	if(rst) begin
-		SCLK<=w_CPOL;										//When rst SCLK is in default state
+always_ff@(posedge clk or negedge rst_n) begin
+	if(!rst_n) begin
+		SCLK<=w_CPOL;										//When rst_n SCLK is in default state
 		edge_counter<=0;	
+		leading_edge<=0;
+		trailing_edge<=0;
 	end
 	/**************************************************************************************************************
 	IDEA:		
@@ -70,72 +77,64 @@ always@(posedge clk, negedge rst) begin
 						  6				     6		  					 6				    6
 				0 <--------------> 5 <---------------> 11 <==> 0 <--------------> 5 <---------------> 11
 	*************************************************************************************************************/
-
-	//Default Assignment
-	leading_edge<=0;
-	trailing_edge<=0;
-
 	else begin
-			if(data_valid==`DATA_VALID) begin
-				edge_counter<=`TOTAL_EDGE_COUNT;
+		if(apb_ready==`APB_READY) begin
+			edge_counter<=`TOTAL_EDGE_COUNT;
+		end
+		else if (edge_counter>0) begin									//Leading Edge Detection
+			if (SPI_CLK_count == `CLK_PER_HALF_BIT -1) begin
+				SCLK<=~SCLK;
+				SPI_CLK_count<=SPI_CLK_count+'b1;
+				edge_counter<=edge_counter-'b1;
+				leading_edge<=1;						//Used to tie leading edge with data_handling block(i.e.,mosi_data_counter)
+				trailing_edge<=0;
 			end
-			else if (edge_counter>0) begin										//Leading Edge Detection
-				if (SPI_CLK_count == `CLK_PER_HALF_BIT -1) begin
-					SCLK<=~SCLK;
-					SPI_CLK_count<=SPI_CLK_count+'b1;
-					edge_counter<=edge_counter-'b1;
-					leading_edge<=1;						//Used to tie leading edge with data_handling block(i.e.,mosi_data_counter)
-				end
-				else if (SPI_CLK_count == (`CLK_PER_HALF_BIT*2) -1) begin		//Trailing Edge Detection
-					SCLK<=~SCLK;
-					SPI_CLK_count<=0;
-					edge_counter<=edge_counter-'b1;
-					trailing_edge<=1;						//Used to tie trailing edge with data_handling block(i.e.,mosi_data_counter)
-				end
-				else begin
-					SPI_CLK_count<=SPI_CLK_count+'b1;
-				end
+			else if (SPI_CLK_count == (`CLK_PER_HALF_BIT*2) -1) begin	//Trailing Edge Detection
+				SCLK<=~SCLK;
+				SPI_CLK_count<=0;
+				edge_counter<=edge_counter-'b1;
+				trailing_edge<=1;						//Used to tie trailing edge with data_handling block(i.e.,mosi_data_counter)
+				leading_edge<=0;
 			end
+			else begin
+				SPI_CLK_count<=SPI_CLK_count+'b1;
+				leading_edge<=0;
+				trailing_edge<=0;
+			end
+		end
 	end 
 end
 
 //Tx Data Counter Handling
-always_ff @(posedge clk or posedge rst) begin
-	if(rst) begin
+always_ff @(posedge clk or negedge rst_n) begin
+	if(!rst_n && (SPI_status_RDY_BSYbar==`SPI_READY)) begin
 		mosi_data_counter<=`WORD_LENGTH-'d1;
-	end
-	else if(SPI_status_RDY_BSYbar==`SPI_READY) begin	//You can't write rst and SPI_status_RDY_BSYbar in one else block. ?????????????? VERIFY
-		mosi_data_counter<=`WORD_LENGTH-'d1;			// May be:SPI_status_RDY_BSYbar==`SPI_READY it might poosible you have to get Data in MOSI
 	end
 /***********************************************************************************************************************************************************************************
 IDEA:
-	If CPHA--> 0  "DATA will be available on MOSI as soon as data_valid is HIGH" (i.e.,before the leading edge of SCLK)
-	If CPHA--> 1  "DATA will be available on MOSI with the SCLK"  (i.e.,with the leading edge of SCLK)
+	On the MOSI line data will be always available
 ***********************************************************************************************************************************************************************************/
 	else begin
-//I need 1 clock delay here for execution of this block. because I want to fill the SPI_BUFF with WDATA. 
-//Solution(1):Register the data_valid with r_data_valid. Then, Use r_data_valid in if condition.[e.g., r_data_valid<=data_valid then, use if(data_valid==`DATA_VALID & ~w_CPHA)]
-//Solution(2):I am going to use extra state "LOAD" only for loading WDATA in SPI_BUFFER in this code.
-		 
-		 if((data_valid==`DATA_VALID) & (~w_CPHA) & (PST==TRANSFER)) begin/**************ONE CLOCK DELAY REQUIRED HERE: Solution->(2)****************/
-		 	//MOSI<=SPI_BUFFER[mosi_data_counter];//-->> USE this in OUTPUT Assignment*****************MIND NON_BLOCKING***********************????<< VERIFY >>
+	//I need 1 clock delay here for execution of this block. because I want to fill the SPI_BUFF with WDATA. 
+	//Solution(1):Register the apb_ready with r_data_valid. Then, Use r_data_valid in if condition.[e.g., r_data_valid<=apb_ready then, use if(apb_ready==`apb_ready & ~w_CPHA)]
+	//Solution(2):I am going to use extra state "LOAD" only for loading WDATA in SPI_BUFFER in this code.
+		 if((apb_ready==`APB_READY) & (~w_CPHA) & (PST==TRANSFER)) begin/**************ONE CLOCK DELAY REQUIRED HERE: Solution->(2)****************/
 		 	mosi_data_counter<=mosi_data_counter-1;
 		 end
 /***********************************************************************************************************************************************************************************
 IDEA:
-_________________________________________________________________________________________________________________________
+________________________________________________________________________________________________________________________
 |	CPOL  |	  CPHA     	|                               DESCRIPTION                                                		|
 |=======================================================================================================================|		
 |	0 	  |		0 -------------->	Data is allowed to change at Trailing Edge. So, mosi_data_counter is incremented at |
 |	1 	  |		0 -------------->	trailing Edge. So, condition is ====>>(trailing_edge & ~w_CPHA)				   		|
 |=======================================================================================================================|
-|	1 	  |		0 -------------->	Data is allowed to change at Trailing Edge. So, mosi_data_counter is incremented at |
-|	1 	  |		1 -------------->	trailing Edge. So, condition is ====>>(trailing_edge & ~w_CPHA)				   		|
+|	0 	  |		1 -------------->	Data is allowed to change at leading Edge. So, mosi_data_counter is incremented at |
+|	1 	  |		1 -------------->	leading Edge. So, condition is ====>>(leading_edge & w_CPHA)				   		|
 |=======================================================================================================================|	
 ***********************************************************************************************************************************************************************************/
 		 else if((leading_edge & w_CPHA) | (trailing_edge & ~w_CPHA)) begin//-------------------------------->BEAUTIFUL LINE OF SPI
-		 	//MOSI<=SPI_BUFFER[mosi_data_counter];//-->>USE this in OUTPUT Assignment********************************MIND NON_BLOCKING*****************************????<< VERFY >>
-		 	mosi_data_counter<=mosi_data_counter-1;
+			mosi_data_counter<=mosi_data_counter-1;
 		 end
 		 else begin
 		 	mosi_data_counter<=mosi_data_counter;
@@ -144,30 +143,30 @@ ________________________________________________________________________________
 end
 
 //Rx DATA COUNTER
-always_ff @(posedge clk or posedge rst) begin
-	if(rst) begin
+always_ff @(posedge clk or negedge rst_n) begin
+	if(!rst_n) begin
 		miso_data_counter <= `WORD_LENGTH - 'd1;
 		rx_data_valid <= 0;
 	end else begin
 		//Default assignment
 		 rx_data_valid <= 0;
-		 if (data_valid == `DATA_VALID) begin
+		 if (apb_ready == `APB_READY) begin
 		 	miso_data_counter <= `WORD_LENGTH - 'd1;
 		 end
 		 else if ((leading_edge & ~w_CPHA) | (trailing_edge & w_CPHA)) begin
 		 	mosi_data_counter <= mosi_data_counter -'d1;
 		 end
 	end
-
 end
+
 //States
 typedef enum {IDLE, LOAD, TRANSFER, INACTIVE}states;
 states PST, NST;
 
 //INACTIVE--> In this state, I am sending 8 bits of Received Data from MISO to APB.
 //PRESENT STATE ASSIGNMENT
-	always_ff @(posedge clk or posedge rst) begin
-		if(rst) begin
+	always_ff @(posedge clk or negedge rst_n) begin
+		if(!rst_n) begin
 			 PST<= IDLE;
 		end else begin
 			 PST<=NST;
@@ -178,18 +177,18 @@ states PST, NST;
 always_comb begin
 	case(PST)
 		IDLE:	
-			if (data_valid) begin
-				NST= LOAD;
+			if (apb_ready) begin
+				NST=LOAD;
 			end
 			else begin
 				NST=PST;
 			end 
 		
 		LOAD:
-			case ({data_valid, SPI_status_RDY_BSYbar})
+			case ({apb_ready, SPI_status_RDY_BSYbar})
 			'b10: 		NST=PST;
 			'b11: 		NST=TRANSFER;
-			default: 	NST=IDLE;;
+			default: 	NST=IDLE;
 			endcase
 		
 		TRANSFER:
@@ -199,9 +198,9 @@ always_comb begin
 			else begin
 				NST=INACTIVE;
 			end
-		
+
 		INACTIVE:
-			case ({data_valid, SPI_status_RDY_BSYbar})
+			case ({apb_ready, SPI_status_RDY_BSYbar})
 				'b01:	NST=IDLE;
 				'b11:	NST=LOAD;
 				default:NST=PST;
