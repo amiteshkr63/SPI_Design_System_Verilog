@@ -52,8 +52,10 @@ wire err_ack;
 //		   -> Data allowed to change at leading edge** 
 
 //////////////////////////////////////////////MODE SELECTION//////////////////////////////////////////
-assign SPI_MODE=`MODE_POL_PHS_00;
-/////////////////////////////////////////////////////////////////////////////////////////////////////
+																									//
+assign SPI_MODE=`MODE_POL_PHS_00;																	//
+																									//
+//////////////////////////////////////////////////////////////////////////////////////////////////////
 
 assign w_CPOL= (SPI_MODE==`MODE_POL_PHS_10) | (SPI_MODE==`MODE_POL_PHS_11);
 assign w_CPHA= (SPI_MODE==`MODE_POL_PHS_01) | (SPI_MODE==`MODE_POL_PHS_11);
@@ -79,7 +81,7 @@ always_ff@(posedge clk or negedge rst_n) begin
 				0 <--------------> 5 <---------------> 11 <==> 0 <--------------> 5 <---------------> 11
 	*************************************************************************************************************/
 	else begin
-		if((PST==IDLE) && (apb_ready)) begin
+		if((PST==IDLE) && (apb_ready)) begin 				/*************Here, WE have to mind CPOL and CPHA***********************/
 			edge_counter<=edge_counter-'b1;
 			SPI_CLK_count<=SPI_CLK_count+1'b1;/////////////
 		end
@@ -108,7 +110,8 @@ always_ff@(posedge clk or negedge rst_n) begin
 end
 
 //Tx Data Counter Handling
-always_ff @(posedge clk or negedge rst_n) begin
+//always_ff @(posedge clk or negedge rst_n) begin
+always_comb begin
 	if(!rst_n && (SPI_status_RDY_BSYbar==`SPI_READY)) begin
 		mosi_data_counter<=`WORD_LENGTH-'d1;
 	end
@@ -120,7 +123,7 @@ IDEA:
 	//I need 1 clock delay here for execution of this block. because I want to fill the SPI_BUFF with WDATA. 
 	//Solution(1):Register the apb_ready with r_data_valid. Then, Use r_data_valid in if condition.[e.g., r_data_valid<=apb_ready then, use if(apb_ready==`apb_ready & ~w_CPHA)]
 	//Solution(2):I am going to use extra state "LOAD" only for loading WDATA in SPI_BUFFER in this code.
-		 if((apb_ready==`APB_READY) & (~w_CPHA) & (PST==TRANSFER)) begin/**************ONE CLOCK DELAY REQUIRED HERE: Solution->(2)****************/
+		 if(((apb_ready==`APB_READY) && (PST==IDLE)) && (~w_CPHA)) begin 	/**************ONE CLOCK DELAY REQUIRED HERE: Solution->(2)****************/
 		 	mosi_data_counter<=mosi_data_counter-1;
 		 end
 /***********************************************************************************************************************************************************************************
@@ -225,7 +228,7 @@ always_comb begin
 					rx_data_valid = 0;
 				end
 				else begin
-					{MOSI, SSbar} = {1'b0, `DISCONNECTED_FROM_SLAVE};
+					{MOSI, SSbar} = {SPI_BUFFER[`WORD_LENGTH-'d1], `CONNECTED_FROM_SLAVE};
 					SPI_status_RDY_BSYbar=`SPI_READY;
 					SPI_BUFFER=/*RD_WR[0]?*/WDATA/*:'b0*/;
 					RDATA='b0;
@@ -280,12 +283,17 @@ SSbar=1 (DISCONNECTED FROM SLAVE)
 
 *******************************************************************************************************/
 		TRANSFER:
-				begin	
-					{MOSI, SSbar} = {SPI_BUFFER[mosi_data_counter], `CONNECTED_FROM_SLAVE};
-					SPI_status_RDY_BSYbar=`SPI_BUSY;
-					SPI_BUFFER[miso_data_counter]=MISO;
-					RDATA='b0;
-					rx_data_valid=0;
+				begin
+					if ((leading_edge & w_CPHA) | (trailing_edge & ~w_CPHA)) begin
+						{MOSI, SSbar} = {SPI_BUFFER[mosi_data_counter], `CONNECTED_FROM_SLAVE};
+						SPI_status_RDY_BSYbar=`SPI_BUSY;
+						RDATA='b0;
+						rx_data_valid=0;
+					end	
+					else if((leading_edge & ~w_CPHA) | (trailing_edge & w_CPHA)) begin
+						SPI_BUFFER[mosi_data_counter]=MISO;
+						
+					end
 				end
 		INACTIVE:
 				begin
