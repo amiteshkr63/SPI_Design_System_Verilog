@@ -31,36 +31,36 @@ spi_master inst_spi_master
 	
 	always #5 clk=~clk;
 
-  	always #20 MISO=$random;	
+  	always #20 MISO=~MISO;	
   
       always begin
         #50 {apb_ready, WDATA}=9'b1_1010_1010;
         #10 apb_ready=1'b0;
-		#80;
+		#320;
         {apb_ready, WDATA}=10'b1_1010_1010;
         #10 apb_ready=1'b0;
-        #80;
+        #320;
         {apb_ready, WDATA}=10'b1_1010_1010;
         #10 apb_ready=1'b0;
-        #80;
+        #320;
         {apb_ready, WDATA}=10'b1_1010_1010;
         #10 apb_ready=1'b0;
-        #80;
+        #320;
         {apb_ready, WDATA}=10'b1_1010_1010;
         #10 apb_ready=1'b0;
-        #80;
+        #320;
         {apb_ready, WDATA}=10'b1_1010_1010;
         #10 apb_ready=1'b0;
-        #80;
+        #320;
         {apb_ready, WDATA}=10'b1_1010_1010;
         #10 apb_ready=1'b0;
-        #80;
+        #320;
 		{apb_ready, WDATA}=10'b1_1010_1010;
         #10 apb_ready=1'b0;
-        #80;
+        #320;
         {apb_ready, WDATA}=10'b1_1010_1010;
         #10 apb_ready=1'b0;
-        #80;
+        #320;
     end	
   
 endmodule
