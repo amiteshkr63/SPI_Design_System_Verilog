@@ -2,7 +2,7 @@
 
 //SSbar LOW ->SPI is acting as MASTER
 //SSbar HIGH -> SPI chill kr raha h. Mood nhi h DATA transfer krne ka.
-
+`timescale 1ns/1ns
 `include "globals.vh"
 module spi_master (rst_n, clk, apb_ready, SPI_status_RDY_BSYbar, rx_data_valid,
 	/*RD_WR,*/ WDATA, RDATA, MOSI, MISO, SCLK, SSbar);
@@ -25,7 +25,7 @@ output reg SCLK, MOSI, SSbar;
 //Internal signals
 reg [`WORD_LENGTH-1:0]SPI_BUFFER;
 reg  [$clog2(`CLK_PER_HALF_BIT*2)-1:0]SPI_CLK_count;
-reg [$clog2(`TOTAL_EDGE_COUNT)-1:0]edge_counter;
+reg [$clog2(`TOTAL_EDGE_COUNT):0]edge_counter;
 reg [$clog2(`WORD_LENGTH)-1:0]mosi_data_counter;
 reg [$clog2(`WORD_LENGTH)-1:0]miso_data_counter;
 reg trailing_edge;
@@ -50,6 +50,10 @@ wire err_ack;
 //		   -> Data allowed to change at trailing edge**
 //CPHA-> 1 -> Sampling at trailing Edge
 //		   -> Data allowed to change at leading edge** 
+
+//States
+typedef enum {IDLE, /*LOAD,*/ TRANSFER/*, INACTIVE*/}states;
+states PST, NST;
 
 //////////////////////////////////////////////MODE SELECTION//////////////////////////////////////////
 																									//
@@ -82,8 +86,11 @@ always_ff@(posedge clk or negedge rst_n) begin
 	*************************************************************************************************************/
 	else begin
 		if((PST==IDLE) && (apb_ready)) begin 				/*************Here, WE have to mind CPOL and CPHA***********************/
-			edge_counter<=edge_counter-'b1;
 			SPI_CLK_count<=SPI_CLK_count+1'b1;/////////////
+			SCLK<=w_CPOL;										//When rst_n SCLK is in default state
+			edge_counter<=`TOTAL_EDGE_COUNT;	
+			leading_edge<=0;
+			trailing_edge<=0;
 		end
 		else if (edge_counter>0) begin									//Leading Edge Detection
 			if (SPI_CLK_count == (`CLK_PER_HALF_BIT -'b1)) begin
@@ -123,9 +130,9 @@ IDEA:
 	//I need 1 clock delay here for execution of this block. because I want to fill the SPI_BUFF with WDATA. 
 	//Solution(1):Register the apb_ready with r_data_valid. Then, Use r_data_valid in if condition.[e.g., r_data_valid<=apb_ready then, use if(apb_ready==`apb_ready & ~w_CPHA)]
 	//Solution(2):I am going to use extra state "LOAD" only for loading WDATA in SPI_BUFFER in this code.
-		 if(((apb_ready==`APB_READY) && (PST==IDLE)) && (~w_CPHA)) begin 	/**************ONE CLOCK DELAY REQUIRED HERE: Solution->(2)****************/
-		 	mosi_data_counter<=mosi_data_counter-1;
-		 end
+		 //if(((apb_ready==`APB_READY) && (PST==IDLE)) && (~w_CPHA)) begin 	/**************ONE CLOCK DELAY REQUIRED HERE: Solution->(2)****************/
+		 	//mosi_data_counter<=mosi_data_counter-1;
+		 //end
 /***********************************************************************************************************************************************************************************
 IDEA:
 ________________________________________________________________________________________________________________________
@@ -138,7 +145,7 @@ ________________________________________________________________________________
 |	1 	  |		1 -------------->	leading Edge. So, condition is ====>>(leading_edge & w_CPHA)				   		|
 |=======================================================================================================================|	
 ***********************************************************************************************************************************************************************************/
-		 else if((leading_edge & w_CPHA) | (trailing_edge & ~w_CPHA)) begin//-------------------------------->BEAUTIFUL LINE OF SPI
+		/* else*/ if((leading_edge & w_CPHA) | (trailing_edge & ~w_CPHA)) begin//-------------------------------->BEAUTIFUL LINE OF SPI
 			mosi_data_counter<=mosi_data_counter-1;
 		 end
 		 else begin
@@ -165,9 +172,6 @@ always_ff @(posedge clk or negedge rst_n) begin
 	end
 end
 
-//States
-typedef enum {IDLE, /*LOAD,*/ TRANSFER, INACTIVE}states;
-states PST, NST;
 
 //INACTIVE--> In this state, I am sending 8 bits of Received Data from MISO to APB.
 //PRESENT STATE ASSIGNMENT
@@ -198,19 +202,19 @@ always_comb begin
 			endcase*/
 		
 		TRANSFER:
-			if (miso_data_counter<8)  begin  //I am changing state when last bit of spi slave data loaded into SPI Buffer
+			if (!((mosi_data_counter=='b0) && (SPI_CLK_count=='d3)))  begin  //I am changing state when last bit of spi slave data loaded into SPI Buffer
 				NST=PST;						//Verify: If last bit of SPI slave data 
 			end
 			else begin
-				NST=INACTIVE;
+				NST=IDLE;
 			end
 
-		INACTIVE:
+/*		INACTIVE:
 			case ({apb_ready, SPI_status_RDY_BSYbar})
 				'b01:	NST=IDLE;
 				'b11:	NST=IDLE;
 				default:NST=PST;
-			endcase
+			endcase*/
 endcase
 end
 
@@ -295,14 +299,15 @@ SSbar=1 (DISCONNECTED FROM SLAVE)
 						
 					end
 				end
-		INACTIVE:
+/*		INACTIVE:
 				begin
 					{MOSI, SSbar} = {1'b0, `DISCONNECTED_FROM_SLAVE};
 					SPI_status_RDY_BSYbar=`SPI_BUSY;
-					RDATA=/*RD_WR[1]?*/SPI_BUFFER/*:'b0*/;
+					RDATA=SPI_BUFFER;
 					rx_data_valid = 1;
-				end
+				end*/
 //No default condition, check if it is creating any unwanted latch. If yes, in default condition set IDLE's Output assignments.
 	endcase
 end
 endmodule : spi_master
+
